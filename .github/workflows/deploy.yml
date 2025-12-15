@@ -1,0 +1,76 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+  REGION: ${{ secrets.GCP_REGION }}
+  SERVICE: ${{ secrets.CLOUD_RUN_SERVICE }}
+  WIF_PROVIDER: ${{ secrets.WIF_PROVIDER }}
+  WIF_SERVICE_ACCOUNT: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Google Auth
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker
+        run: gcloud auth configure-docker gcr.io
+
+      - name: Build and Push Backend
+        run: |
+          docker build -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}-backend ./backend
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}-backend
+
+      - name: Deploy Backend
+        id: deploy-backend
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}-backend
+          region: ${{ env.REGION }}
+          image: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}-backend
+          env_vars: |
+            APP_BASE_URL=https://${{ env.SERVICE }}-frontend-${{ env.PROJECT_ID }}.${{ env.REGION }}.run.app
+            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+            GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+            APP_ENCRYPTION_KEY=${{ secrets.APP_ENCRYPTION_KEY }}
+            DATABASE_URL=${{ secrets.DATABASE_URL }}
+
+      - name: Build and Push Frontend
+        run: |
+          docker build \
+            --build-arg NEXT_PUBLIC_API_URL=${{ steps.deploy-backend.outputs.url }} \
+            -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}-frontend ./frontend
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}-frontend
+
+      - name: Deploy Frontend
+        id: deploy-frontend
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE }}-frontend
+          region: ${{ env.REGION }}
+          image: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE }}-frontend
+
+      - name: Show Output
+        run: |
+          echo "Backend: ${{ steps.deploy-backend.outputs.url }}"
+          echo "Frontend: ${{ steps.deploy-frontend.outputs.url }}"
