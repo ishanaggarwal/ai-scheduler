@@ -1,4 +1,4 @@
-# AI Scheduler
+# AI Scheduler (AGENTIC AI)
 
 A production-ready AI scheduling agent that creates Google Calendar events with Google Meet links from natural language commands.
 
